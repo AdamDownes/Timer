@@ -1,29 +1,27 @@
-# Sequence Timer PWA — Preset Version
+# Sequence Timer PWA — Louder Cue Version
 
-New features:
+New in this version:
 
-- Save named presets.
-- Load presets later.
-- Overwrite an existing preset.
-- Delete presets.
-- Presets survive closing and reopening the app.
-- The current unsaved timer setup is also restored automatically.
-- Continuous or manual-advance mode is saved with each preset.
-- Sound on/off is saved with each preset.
+- Short beep
+- Loud triple beep (default)
+- Bell
+- Cue style is remembered
+- Cue style is saved inside presets
+- Tries to use iOS web audio in playback mode when supported
+- Service-worker cache version bumped so updates propagate more reliably
 
-Presets are stored using browser localStorage. They stay on the same browser/device unless site data is cleared.
+## Updating GitHub Pages
 
-## Test locally
+Replace the old files in your repository with the files from this ZIP, keeping the same filenames.
 
-Run this command inside this folder:
+The most important files to replace are:
 
-    python -m http.server 8000
+- index.html
+- sw.js
+- manifest.webmanifest
 
-Then open:
+Also replace the icon files if you want everything to match exactly.
 
-    http://localhost:8000
+After committing the changes, GitHub Pages will redeploy automatically.
 
-## Updating an installed iPhone PWA
-
-If this replaces an earlier hosted version, upload all of the new files to the same host.
-Safari may briefly show a cached version. Closing and reopening the Home Screen app, or refreshing the site in Safari, will normally pick up the new service worker version.
+On iPhone, open the site in Safari and refresh it once. Then fully close and reopen the Home Screen app if it still shows the old version.

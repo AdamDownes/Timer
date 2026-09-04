@@ -163,6 +163,14 @@
       line-height: 1.35;
     }
 
+    .audio-grid {
+      display: grid;
+      grid-template-columns: 1fr auto;
+      gap: 10px;
+      align-items: end;
+      margin-top: 10px;
+    }
+
     .runner {
       text-align: center;
       padding: 28px 16px;
@@ -228,6 +236,16 @@
     .message.success { color: var(--success); }
     .message.error { color: #ff9ea8; }
 
+    .note {
+      margin-top: 10px;
+      padding: 10px 12px;
+      border-radius: 12px;
+      background: #171f31;
+      color: var(--muted);
+      font-size: .84rem;
+      line-height: 1.4;
+    }
+
     .hide { display: none !important; }
 
     .pill {
@@ -246,11 +264,9 @@
         grid-template-columns: 1fr 72px 72px 44px;
       }
 
-      .mode-grid {
-        grid-template-columns: 1fr;
-      }
-
-      .preset-grid {
+      .mode-grid,
+      .preset-grid,
+      .audio-grid {
         grid-template-columns: 1fr;
       }
 
@@ -335,13 +351,30 @@
       </div>
     </div>
 
-    <div class="row" style="margin-top:14px;">
-      <label style="margin:0; display:flex; gap:10px; align-items:center; color:var(--text);">
+    <div style="margin-top:18px;">
+      <strong>Timer sound</strong>
+
+      <div class="audio-grid">
+        <div>
+          <label for="cueStyle">Cue style</label>
+          <select id="cueStyle">
+            <option value="short">Short beep</option>
+            <option value="triple" selected>Loud triple beep</option>
+            <option value="bell">Bell</option>
+          </select>
+        </div>
+
+        <button id="testSound" class="btn ghost" type="button">Test sound</button>
+      </div>
+
+      <label style="margin:12px 0 0; display:flex; gap:10px; align-items:center; color:var(--text);">
         <input id="soundEnabled" type="checkbox" checked />
         Sound at each change
       </label>
 
-      <button id="testSound" class="btn ghost" type="button">Test sound</button>
+      <div class="note">
+        The loud triple beep uses higher frequencies and a longer cue so it cuts through music better. iOS web apps still cannot reliably lower Spotify or Apple Music volume.
+      </div>
     </div>
 
     <div style="margin-top:16px;">
@@ -383,8 +416,8 @@
 (() => {
   const $ = id => document.getElementById(id);
 
-  const PRESETS_KEY = "sequenceTimerPresetsV1";
-  const LAST_SETUP_KEY = "sequenceTimerLastSetupV1";
+  const PRESETS_KEY = "sequenceTimerPresetsV2";
+  const LAST_SETUP_KEY = "sequenceTimerLastSetupV2";
 
   let timers = [
     { label: "Timer 1", minutes: 1, seconds: 0 },
@@ -438,6 +471,11 @@
     if (radio) radio.checked = true;
   }
 
+  function getCueStyle() {
+    const v = $("cueStyle").value;
+    return ["short", "triple", "bell"].includes(v) ? v : "triple";
+  }
+
   function getSetupSnapshot() {
     return {
       timers: timers.map(t => ({
@@ -446,7 +484,8 @@
         seconds: clampInt(t.seconds, 0, 59, 0)
       })),
       advanceMode: getAdvanceMode(),
-      soundEnabled: $("soundEnabled").checked
+      soundEnabled: $("soundEnabled").checked,
+      cueStyle: getCueStyle()
     };
   }
 
@@ -463,6 +502,9 @@
 
     setAdvanceMode(snapshot.advanceMode);
     $("soundEnabled").checked = snapshot.soundEnabled !== false;
+    $("cueStyle").value = ["short", "triple", "bell"].includes(snapshot.cueStyle)
+      ? snapshot.cueStyle
+      : "triple";
 
     renderTimers();
     updateSummary();
@@ -580,11 +622,17 @@
   function updateSummary() {
     const total = timers.reduce((sum, t) => sum + secondsFor(t), 0);
     const modeText = getAdvanceMode() === "manual" ? "manual advance" : "continuous";
+    const cueText = {
+      short: "short beep",
+      triple: "loud triple beep",
+      bell: "bell"
+    }[getCueStyle()];
 
     $("summary").innerHTML = `
       <span class="pill">${timers.length} timer${timers.length === 1 ? "" : "s"}</span>
       <span class="pill">${formatTimeFromSeconds(total)} total</span>
       <span class="pill">${modeText}</span>
+      <span class="pill">${cueText}</span>
     `;
   }
 
@@ -633,9 +681,7 @@
       select.appendChild(option);
     });
 
-    if (selectedName && presets[selectedName]) {
-      select.value = selectedName;
-    }
+    if (selectedName && presets[selectedName]) select.value = selectedName;
   }
 
   function showPresetMessage(text, type = "") {
@@ -741,26 +787,64 @@
     showPresetMessage(`Deleted "${selected}".`, "success");
   }
 
+  async function ensureAudio() {
+    try {
+      if (navigator.audioSession && "type" in navigator.audioSession) {
+        navigator.audioSession.type = "playback";
+      }
+    } catch {}
+
+    if (!audioCtx) {
+      audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    }
+
+    if (audioCtx.state === "suspended") {
+      await audioCtx.resume();
+    }
+
+    return audioCtx;
+  }
+
+  function playTone(ctx, frequency, start, duration, volume = 0.55, type = "square") {
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+
+    osc.type = type;
+    osc.frequency.setValueAtTime(frequency, start);
+
+    gain.gain.setValueAtTime(0.0001, start);
+    gain.gain.exponentialRampToValueAtTime(volume, start + 0.008);
+    gain.gain.setValueAtTime(volume, Math.max(start + 0.009, start + duration - 0.04));
+    gain.gain.exponentialRampToValueAtTime(0.0001, start + duration);
+
+    osc.connect(gain).connect(ctx.destination);
+    osc.start(start);
+    osc.stop(start + duration + 0.02);
+  }
+
   async function beep() {
     if (!$("soundEnabled").checked) return;
 
     try {
-      if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-      if (audioCtx.state === "suspended") await audioCtx.resume();
+      const ctx = await ensureAudio();
+      const now = ctx.currentTime + 0.02;
+      const style = getCueStyle();
 
-      const osc = audioCtx.createOscillator();
-      const gain = audioCtx.createGain();
+      if (style === "short") {
+        playTone(ctx, 1200, now, 0.28, 0.5, "square");
+      }
 
-      osc.type = "sine";
-      osc.frequency.value = 880;
+      else if (style === "triple") {
+        playTone(ctx, 1450, now,        0.20, 0.68, "square");
+        playTone(ctx, 1750, now + 0.27, 0.20, 0.68, "square");
+        playTone(ctx, 2050, now + 0.54, 0.30, 0.72, "square");
+      }
 
-      gain.gain.setValueAtTime(0.0001, audioCtx.currentTime);
-      gain.gain.exponentialRampToValueAtTime(0.25, audioCtx.currentTime + 0.01);
-      gain.gain.exponentialRampToValueAtTime(0.0001, audioCtx.currentTime + 0.22);
-
-      osc.connect(gain).connect(audioCtx.destination);
-      osc.start();
-      osc.stop(audioCtx.currentTime + 0.24);
+      else if (style === "bell") {
+        playTone(ctx, 880,  now,        0.65, 0.42, "sine");
+        playTone(ctx, 1320, now,        0.55, 0.22, "sine");
+        playTone(ctx, 1760, now + 0.02, 0.45, 0.10, "sine");
+      }
     } catch (e) {
       console.warn("Sound unavailable", e);
     }
@@ -771,7 +855,7 @@
       if ("wakeLock" in navigator) {
         wakeLock = await navigator.wakeLock.request("screen");
       }
-    } catch (e) {}
+    } catch {}
   }
 
   function releaseWakeLock() {
@@ -801,10 +885,7 @@
     advanceMode = getAdvanceMode();
     saveLastSetup();
 
-    try {
-      if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-      if (audioCtx.state === "suspended") await audioCtx.resume();
-    } catch (e) {}
+    try { await ensureAudio(); } catch {}
 
     currentIndex = 0;
     waitingForNext = false;
@@ -905,7 +986,6 @@
 
   function startNextTimer() {
     if (!waitingForNext) return;
-
     currentIndex++;
     $("startNext").classList.add("hide");
     startCurrent(false);
@@ -996,6 +1076,11 @@
   });
 
   $("soundEnabled").addEventListener("change", saveLastSetup);
+
+  $("cueStyle").addEventListener("change", () => {
+    updateSummary();
+    saveLastSetup();
+  });
 
   document.querySelectorAll('input[name="advanceMode"]').forEach(input => {
     input.addEventListener("change", () => {
